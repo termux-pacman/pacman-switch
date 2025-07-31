@@ -1,2 +1,2 @@
 # pacman-switch
-update-alternatives for pacman
+In development, wait for release.
