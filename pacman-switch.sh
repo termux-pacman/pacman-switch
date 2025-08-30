@@ -876,8 +876,10 @@ _ps_arg_analysis() {
 				len++
 		if (len >= $2) {
 			split($3, funcs, ",")
-			for (i in funcs)
+			for (i in funcs) {
+				gsub(/\n/, "", funcs[i])
 				print "_ps_" funcs[i] "=true"
+			}
 			for (i in args_array)
 				if (args_array[i] == $1)
 					delete args_array[i]
