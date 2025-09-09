@@ -26,15 +26,19 @@ _ps_haserror=false
 # user variable settings / user options
 _ps_needed=false
 _ps_noconfirm=false
+_ps_noghost=false
 _ps_enable_set=false
 _ps_unset_disable=false
 _ps_unset_replace=false
 _ps_disable_unset=false
+_ps_disable_ghost=false
 _ps_query_groups=false
+_ps_query_global_list=false
+_ps_query_list=false
+_ps_query_info=false
 _ps_helpmode=false
 _ps_automode=false
 _ps_updatemode=false
-#_ps_ghost=false ???
 
 _ps_message() {
 	! ${_ps_nomessage} && echo -ne "$1" >&2 || true
@@ -63,6 +67,10 @@ _ps_warning() {
 
 _ps_error_message() {
 	_ps_nomessage=false _ps_message "\e[1;31merror:\e[0m $1\n"
+}
+
+_ps_init_error() {
+	_ps_error_message "$1"
 	_ps_haserror=true
 }
 
@@ -440,7 +448,6 @@ _ps_action_sw_point() {
 	done
 
 	case "${operation}" in
-	#	"enable"|"disable") _ps_read_enabled_switchers;;
 		"set"|"unset") _ps_read_setted_switchers;;
 	esac
 
@@ -474,9 +481,22 @@ _ps_choose_sw_by_priority() {
 }
 
 _ps_choose_sw_to_set() {
-	local list="$(tr ' ' '\n' <<< "${@}" | sort -u)" sw sws swi swi_s mode=$(${_ps_automode} && echo "auto" || echo "manual")
+	local list="$(tr ' ' '\n' <<< "${@}" | sort -u)" sw sws swi swi_s mode=$(${_ps_automode} && echo "auto" || echo "manual") ghost_sw
 	for sw in $(awk -F ':' '!a[$1]++ {print $1}' <<< "${list}"); do
 		sws=($(grep "^${sw}:" <<< "${list}" | awk -F ':' '!a[$2 ":" $3]++ {print $2 ":" $3}'))
+		ghost_sw=()
+		for swi in ${!sws[@]}; do
+			swi_s="${sw}:${sws[${swi}]%:*}"
+			if [ ! -f "${_ps_switcher_files_path}/${swi_s#*:}.sw" ]; then
+				_ps_warning "switcher ${swi_s} is ghost"
+				if ${_ps_noghost}; then
+					ghost_sw+=("${swi_s#*:}")
+					list=$(sed "/^${swi_s}:/d" <<< "${list}")
+					unset sws[${swi}]
+				fi
+			fi
+		done
+		sws=(${sws[@]})
 		if (("${#sws[@]}" > 1)); then
 			swi_s=""
 			if ${_ps_selfmode}; then
@@ -487,10 +507,11 @@ _ps_choose_sw_to_set() {
 				for swi in ${!sws[@]}; do
 					_ps_message "   $((${swi}+1))) ${sws[${swi}]%%:*}\n"
 				done
-				while true; do
-					_ps_message "\n"
+				_ps_message "\n"
+				while ! ${_ps_noconfirm}; do
 					read -p "Enter a selection (default=auto): " swi_s
-					if [[ -z "${swi_s}" ]]; then
+					if [[ -z "${swi_s}" || "${swi_s}" = "auto" ]]; then
+						swi_s=""
 						break
 					elif ! [[ "${swi_s}" =~ ^[0-9]+$ ]]; then
 						_ps_error_message "invalid number: ${swi_s}"
@@ -500,7 +521,7 @@ _ps_choose_sw_to_set() {
 						swi_s=$(("${swi_s}"-1))
 						break
 					fi
-					continue
+					_ps_message "\n"
 				done
 			fi
 			if [ -z "${swi_s}" ]; then
@@ -514,18 +535,35 @@ _ps_choose_sw_to_set() {
 			for swi in $(tr ' ' '\n' <<< "${!sws[@]}" | grep -v "^${swi_s}$"); do
 				list=$(sed "/^${sw}:${sws[${swi}]}/d" <<< "${list}")
 			done
+		elif ${_ps_noghost} && (("${#sws[@]}" == 0)); then
+			_ps_init_error "all listed switchers of group ${sw} are ghosts: ${ghost_sw[@]}"
 		fi
 	done
+	if ${_ps_haserror}; then
+		exit 1
+	fi
 
+	ghost_sw=()
 	for sw in $(grep -Eo "^($(tr ' ' '|' <<< "${_ps_setted_sw[@]%:*}")):" <<< "${list}" | sort -u); do
 		sw="${sw::-1}"
 		if _ps_check_checksum_switcher "${sw}"; then
 			_ps_warning "switcher ${sw} is already setted"
 			if ${_ps_needed}; then
 				list=$(sed "/^${sw}:/d" <<< "${list}")
+				continue
 			fi
 		fi
+		if [ ! -f "${_ps_switcher_files_path}/${sw#*:}.sw" ]; then
+			ghost_sw+=("${sw}")
+		fi
 	done
+	if [ -n "${ghost_sw}" ]; then
+		_ps_info "Ghost switchers are going to be setted:"
+		for sw in ${ghost_sw[@]}; do
+			_ps_message "  \033[1m${sw}\033[0m\n"
+		done
+		_ps_question_to_continue
+	fi
 
 	echo "${list}"
 }
@@ -542,18 +580,10 @@ _ps_nothing_to_do() {
 	exit 0
 }
 
-_ps_notify_about_sw_and_get_confirm() {
-	_ps_info "The following switcher points will be ${1}:"
-	awk -F ':' '{ if (sw != $1 ":" $2) {sw = $1 ":" $2; print "  \033[1m" sw "\033[0m"}; print "    " $4}' <<< "${2}"
-	_ps_message "\n"
-
-	if [ -n "${4}" ]; then
-		_ps_info "${3}:"
-		_ps_message "${4}\n\n"
-	fi
-
+_ps_question_to_continue() {
 	local yn
 	if ! ${_ps_noconfirm}; then
+		_ps_message "\n"
 		read -p "$(_ps_header_standard "Do you want to continue? [Y/n] ")" yn
 		if ! [[ -z "${yn}" || "${yn,,}" = "y" || "${yn,,}" = "yes" ]]; then
 			exit 1
@@ -561,9 +591,23 @@ _ps_notify_about_sw_and_get_confirm() {
 	fi
 }
 
+_ps_notify_about_sw_and_get_confirm() {
+	_ps_info "The following switcher points will be ${1}:"
+	awk -F ':' '{ if (sw != $1 ":" $2) {sw = $1 ":" $2; print "  \033[1m" sw "\033[0m"}; print "    " $4}' <<< "${2}"
+	_ps_message "\n"
+
+	if [ -n "${4}" ]; then
+		_ps_info "${3}:"
+		_ps_message "${4}\n"
+	fi
+
+	_ps_question_to_continue
+}
+
 _ps_enable() {
 	_ps_selfmode=true
 
+	_ps_commit "Reading switcher files"
 	local data_sw
 	data_sw=$(_ps_read_switcher_file ${@})
 
@@ -641,16 +685,35 @@ _ps_enable() {
 }
 
 _ps_disable() {
+	_ps_commit "Getting enabled switchers"
 	local data_sw
-	data_sw=$(_ps_get_enabled_switcher ${@})
+	if [[ -z "${@}" ]]; then
+		data_sw="$(tr ' ' '\n' <<< ${_ps_enabled_sw[@]})"
+	else
+		data_sw=$(_ps_get_enabled_switcher ${@})
+	fi
+
+	local sw sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw}"))
+	if ${_ps_disable_ghost}; then
+		_ps_commit "Searching ghost switchers for disabling"
+		for sw in ${!sws[@]}; do
+			if [ -f "${_ps_switcher_files_path}/${sws[sw]#*:}.sw" ]; then
+				data_sw=$(sed "/^${sws[sw]}:/d" <<< "${data_sw}")
+				unset sws[${sw}]
+			fi
+		done
+		if [ -z "${data_sw}" ]; then
+			_ps_nothing_to_do
+		fi
+	fi
 
 	_ps_commit "Checking switchers for disabling"
 	_ps_check_sw "disable" ${data_sw}
 
-	local unset_sw sw
-	if ${_ps_disable_unset}; then
-		unset_sw=$(_ps_select_setted_sw=true _ps_noerror=true _ps_nomessage=true _ps_get_enabled_switcher ${@} || true)
-		if [ -z "${unset_sw}" ]; then
+	local unset_sw
+	if ${_ps_disable_unset} || ${_ps_disable_ghost}; then
+		unset_sw=$(_ps_select_setted_sw=true _ps_noerror=true _ps_nomessage=true _ps_get_enabled_switcher ${sws[@]} || true)
+		if ! ${_ps_disable_ghost} && [ -z "${unset_sw}" ]; then
 			_ps_warning "no switchers found that need unset"
 		fi
 	fi
@@ -669,8 +732,9 @@ _ps_disable() {
 }
 
 _ps_set() {
+	_ps_commit "Getting enabled switchers"
 	local data_sw
-	if [ -z "${@}" ]; then
+	if [[ -z "${@}" ]]; then
 		data_sw="$(tr ' ' '\n' <<< ${_ps_enabled_sw[@]})"
 	else
 		data_sw=$(_ps_get_enabled_switcher ${@})
@@ -682,7 +746,7 @@ _ps_set() {
 		sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw}"))
 		for sw in ${!sws[@]}; do
 			if _ps_check_checksum_switcher "${sws[${sw}]}" || \
-			([ ! -f "${_ps_switcher_files_path}/${sws[${sw}]##*:}.sw" ] && _ps_warning "switcher file of ${sws[${sw}]} not found (ghost???), skip updating"); then
+			([ ! -f "${_ps_switcher_files_path}/${sws[${sw}]##*:}.sw" ] && _ps_warning "switcher ${sws[${sw}]} is ghost, skip updating"); then
 				unset sws[${sw}]
 			fi
 		done
@@ -723,6 +787,7 @@ _ps_unset() {
 		_ps_selfmode=true
 	fi
 
+	_ps_commit "Getting setted switchers"
 	local data_sw
 	data_sw=$(_ps_select_setted_sw=true _ps_get_enabled_switcher ${@})
 
@@ -763,25 +828,56 @@ _ps_unset() {
 
 _ps_query() {
 	local data_sw
-	if [ -z "${@}" ]; then
+	if [[ -z "${@}" ]]; then
 		data_sw="$(tr ' ' '\n' <<< ${_ps_enabled_sw[@]})"
 	else
 		data_sw=$(_ps_nomessage=true _ps_get_enabled_switcher ${@})
 	fi
 
-	local sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2 ":" $3}' <<< "${data_sw}")) sw group name
-	for group in $(tr ' ' '\n' <<< ${sws[@]%%:*} | sort -u); do
-		echo -e "\033[1m${group}\033[0m"
-		if ! ${_ps_query_groups}; then
-			for name in $(awk -F ':' -v RS=' ' -v group="${group}" '{if (group == $1) print $2 ":" $3}' <<< "${sws[@]}"); do
-				echo -n "  ${name}"
-				if [[ " ${_ps_setted_sw[@]%:*} " =~ " ${group}:${name%%:*} " ]]; then
-					echo -n " [setted:$(_ps_get_mode_by_setted_sw ${group})]"
-				fi
-				echo
-			done
-		fi
-	done
+	if ${_ps_query_global_list}; then
+		echo "${data_sw}"
+	elif ${_ps_query_list}; then
+		awk -F ':' '{print "\033[1m" $1 ":" $2 "\033[0m " $4}' <<< "${data_sw}"
+	elif ${_ps_query_info}; then
+		awk -F ':' -v prefix="${_ps_prefix}/" -v sw_files_path="${_ps_switcher_files_path}/" '{
+			if (sw != $1 ":" $2) {
+				if (sw != "")
+					print ""
+				sw = $1 ":" $2
+				print "\033[1mSwitcher\033[0m  : " $2
+				print "\033[1mGroup\033[0m     : " $1
+				print "\033[1mPriority\033[0m  : " $3
+				printf "\033[1mGhost\033[0m     : "
+				if (system("test -f " sw_files_path $2 ".sw"))
+					print "Yes"
+				else
+					print "No"
+				printf "\033[1mPoints\033[0m    : "
+			} else {
+				printf "            "
+			}
+			gsub(prefix, "", $4)
+			gsub(prefix, "", $5)
+			print $4 " -> " $5
+		}
+		END {
+			print ""
+		}' <<< "${data_sw}"
+	else
+		local sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2 ":" $3}' <<< "${data_sw}")) sw name
+		for sw in $(tr ' ' '\n' <<< ${sws[@]%%:*} | sort -u); do
+			echo -e "\033[1m${sw}\033[0m"
+			if ! ${_ps_query_groups}; then
+				for name in $(awk -F ':' -v RS=' ' -v sw="${sw}" '{if (sw == $1) print $2 ":" $3}' <<< "${sws[@]}"); do
+					echo -n "  ${name}"
+					if [[ " ${_ps_setted_sw[@]%:*} " =~ " ${sw}:${name%%:*} " ]]; then
+						echo -n " [setted:$(_ps_get_mode_by_setted_sw ${sw})]"
+					fi
+					echo
+				done
+			fi
+		done
+	fi
 }
 
 _ps_help_main() {
@@ -804,12 +900,14 @@ options:
   -a, --auto
   -s, --set
       --needed
-      --noconfirm\n"
+      --noconfirm
+      --noghost\n"
 }
 
 _ps_help_disable() {
 	_ps_message "usage:  pacman-switch {-D --disable} [options] [switcher(s)]
 options:
+  -g, --ghost
   -u, --unset
       --noconfirm\n"
 }
@@ -820,7 +918,8 @@ options:
   -a, --auto
   -u, --update
       --needed
-      --noconfirm\n"
+      --noconfirm
+      --noghost\n"
 }
 
 _ps_help_unset() {
@@ -829,13 +928,16 @@ options:
   -a, --auto
   -d, --disable
   -r, --replace
-      --noconfirm\n"
+      --noconfirm
+      --noghost\n"
 }
 
 _ps_help_query() {
 	_ps_message "usage:  pacman-switch {-Q --query} [options] [switcher(s)]
 options:
-  -g, --groups\n"
+  -g, --groups
+  -i, --info
+  -l, --list (-ll)\n"
 }
 
 _ps_version_info() {
@@ -899,19 +1001,42 @@ _ps_run_operation() {
 		return
 	fi
 
-	if ${_ps_updatemode} && ${_ps_automode}; then
-		_ps_error "invalid option: '--auto' and '--update' may not be used together"
-	fi
+	eval "$(awk -v RS=' ' 'BEGIN {
+		i=1
+	}
+	{
+		gsub(/\n/, "", $1)
+		syn[i] = $1
+		i++
+	}
+	END {
+		len = i-1
+		for (i in syn) {
+			for (j in syn) {
+				if (i == j)
+					continue
+				x=(i+len**(i%2+1))*(j+len**(j%2+1))
+				if (!(x in sort))
+					sort[x] = syn[i] ":" syn[j]
+			}
+		}
+		for (i in sort) {
+			split(sort[i], sort_array, ":")
+			print "${_ps_" sort_array[1] "} && ${_ps_" sort_array[3] "} && _ps_error \"invalid option: '"'"'--" sort_array[2] "'"'"' and '"'"'--" sort_array[4] "'"'"' may not be used together\" || true"
+		}
+	}' <<< "${_ps_conflicting_args}")"
 
 	if [ ! -d "${_ps_switcher_files_path}" ]; then
-		_ps_error_message "path to switcher files not found: ${_ps_switcher_files_path}"
+		_ps_init_error "path to switcher files not found: ${_ps_switcher_files_path}"
 	fi
 	if [ ! -d "${_ps_enabled_switchers_path}" ]; then
-		_ps_error_message "path to switchers not found: ${_ps_enabled_switchers_path}"
+		_ps_init_error "path to switchers not found: ${_ps_enabled_switchers_path}"
 	fi
 	if ${_ps_haserror}; then
 		exit 1
 	fi
+
+	_ps_read_enabled_switchers
 
 	local switchers=() switcher group name
 	for switcher in ${arg_switchers[@]}; do
@@ -926,7 +1051,8 @@ _ps_run_operation() {
 			_ps_error "syntax error: switcher unassigned"
 		fi
 		switcher="${group}:${name}"
-		if grep -Eqs "(^| )switcher_group_${group//\*/\.*}( |\()" "${_ps_switcher_files_path}/"${name}".sw"; then
+		if grep -Eqs "(^| )switcher_group_${group//\*/\.*}( |\()" "${_ps_switcher_files_path}/"${name}".sw" || \
+			grep -q " ${switcher//\*/\.*}:" <<< " ${_ps_enabled_sw[@]}"; then
 			if ${_ps_onlygroup} && [ "${group}" = "*" ]; then
 				_ps_warning "switcher ${switcher} will be ignored (need to specify group)"
 			elif ! [[ " ${switchers[@]} " =~ " ${switcher} " ]]; then
@@ -934,7 +1060,7 @@ _ps_run_operation() {
 			fi
 			continue
 		fi
-		_ps_error_message "switcher not found: ${switcher}"
+		_ps_init_error "switcher not found: ${switcher}"
 	done
 	if ${_ps_haserror}; then
 		exit 1
@@ -944,10 +1070,6 @@ _ps_run_operation() {
 		_ps_error "no targets specified"
 	fi
 
-	_ps_commit "Reading enabled switchers"
-	_ps_read_enabled_switchers
-
-	_ps_commit "Reading setted switchers"
 	_ps_read_setted_switchers
 	_ps_static_setted_sw=(${_ps_setted_sw[@]})
 
@@ -965,6 +1087,7 @@ _ps_args=($(awk -v RS=' ' '{
 	}
 	print $1
 }' <<< "${@}"))
+_ps_conflicting_args=""
 
 _ps_root_arg="${_ps_args[0]}"
 unset _ps_args[0]
@@ -980,21 +1103,26 @@ case "${_ps_root_arg}" in
 		-{a,-auto}:1:automode,enable_set \
 		-{h,-help}:1:helpmode \
 		--needed:1:needed \
-		--noconfirm:1:noconfirm
+		--noconfirm:1:noconfirm \
+		--noghost:1:noghost
 	;;
 	-D|--disable)
+	_ps_conflicting_args="disable_ghost:ghost disable_unset:unset"
 	_ps_run_operation disable \
+		-{g,-ghost}:1:disable_ghost,norequire_sw \
 		-{u,-unset}:1:disable_unset,onlygroup \
 		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm
 	;;
 	-S|--set)
+	_ps_conflicting_args="automode:auto updatemode:update"
 	_ps_run_operation set \
 		-{a,-auto}:1:automode,onlygroup \
 		-{u,-update}:1:updatemode,norequire_sw \
 		-{h,-help}:1:helpmode \
 		--needed:1:needed \
-		--noconfirm:1:noconfirm
+		--noconfirm:1:noconfirm \
+		--noghost:1:noghost
 	;;
 	-U|--unset)
 	_ps_run_operation unset \
@@ -1002,13 +1130,18 @@ case "${_ps_root_arg}" in
 		-{d,-disable}:1:unset_disable \
 		-{a,-auto}:1:automode,unset_replace,unset_disable \
 		-{h,-help}:1:helpmode \
-		--noconfirm:1:noconfirm
+		--noconfirm:1:noconfirm \
+		--noghost:1:noghost
 	;;
 	-Q|--query)
 	_ps_norequire_sw=true
+	_ps_conflicting_args="query_groups:groups query_info:info query_list:list"
 	_ps_run_operation query \
 		-{h,-help}:1:helpmode \
-		-{g,groups}:1:query_groups
+		-{g,-groups}:1:query_groups \
+		-{i,-info}:1:query_info \
+		-{l,-list}:2:query_list,query_global_list \
+		-{l,-list}:1:query_list
 	;;
 	-V|--version)
 	_ps_version_info
