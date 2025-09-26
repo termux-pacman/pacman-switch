@@ -1,20 +1,20 @@
 switcher_group_vi() {
-	points=(bin/vi:libexec/busybox/vi)
+	associations=(bin/vi:libexec/busybox/vi)
 	priority=10
 }
 
 switcher_group_editor() {
-	points=(bin/editor:libexec/busybox/vi)
+	associations=(bin/editor:libexec/busybox/vi)
 	priority=10
 }
 
 switcher_group_pager() {
-	points=(bin/pager:libexec/busybox/less)
+	associations=(bin/pager:libexec/busybox/less)
 	priority=10
 }
 
 switcher_group_nc() {
-	points=(bin/nc:libexec/busybox/nc
+	associations=(bin/nc:libexec/busybox/nc
 		bin/ncat:libexec/busybox/nc
 		bin/netcat:libexec/busybox/nc
 	)
