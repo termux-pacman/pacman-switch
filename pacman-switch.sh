@@ -14,8 +14,8 @@ _ps_enabled_switchers_path="${_ps_prefix}/var/lib/pacman/switch"
 
 # database
 _ps_enabled_sw=()
-_ps_setted_sw=()
-_ps_static_setted_sw=()
+_ps_selected_sw=()
+_ps_static_selected_sw=()
 _ps_non_integrity_sw=()
 
 # style
@@ -28,7 +28,7 @@ _ps_red=""
 
 # system variable settings for internal work
 _ps_nomessage=false
-_ps_select_setted_sw=false
+_ps_select_selected_sw=false
 _ps_selfmode=false
 _ps_noprogress=false
 _ps_nowarning=false
@@ -38,15 +38,16 @@ _ps_onlyswitcher=false
 _ps_norequire_sw=false
 _ps_haserror=false
 _ps_arg_is_swfile=false
+_ps_progress_noret=false
 
 # user variable settings / user options
 _ps_needed=false
 _ps_noconfirm=false
 _ps_noghost=false
-_ps_enable_set=false
-_ps_unset_disable=false
-_ps_unset_replace=false
-_ps_disable_unset=false
+_ps_enable_select=false
+_ps_reject_disable=false
+_ps_reject_replace=false
+_ps_disable_reject=false
 _ps_disable_ghost=false
 _ps_guery_check=false
 _ps_query_groups=false
@@ -66,7 +67,7 @@ _ps_message() {
 
 _ps_progress() {
 	local now="$1" goal="$2"
-	! ${_ps_noprogress} && _ps_message "${_ps_title_progress}(${now}/${goal}) ${3}${_ps_nostyle}$(((now < goal)) && echo '\r' || echo '\n')" || true
+	! ${_ps_noprogress} && _ps_message "${_ps_title_progress}(${now}/${goal}) ${3}${_ps_nostyle}$((! ${_ps_progress_noret} && ((now < goal))) && echo '\r' || echo '\n')" || true
 }
 
 _ps_header_standard() {
@@ -104,7 +105,7 @@ _ps_nothing_to_do() {
 	exit 0
 }
 
-_ps_merge_datas() {
+_ps_merge_data() {
 	local rows=${1}
 	shift 1
 
@@ -122,7 +123,7 @@ _ps_merge_datas() {
 }
 
 _ps_read_switcher_file() {
-	local i=1 goal=$# error=() result=() name group points switcher_path switcher
+	local i=1 goal=$# error=() result=() name group associations switcher_path switcher
 	while (($# >= 1)); do
 		_ps_progress "${i}" "${goal}" "reading switcher files"
 		switcher="${1}"
@@ -142,7 +143,7 @@ _ps_read_switcher_file() {
 			switcher_path="${_ps_switcher_files_path}/${name}.sw"
 		fi
 
-		points=()
+		associations=()
 		if [[ "${name}" != "*" && ! -f "${switcher_path}" ]]; then
 			error+=("${group:=[unknown]}:${name}:notfound")
 			continue
@@ -162,8 +163,8 @@ _ps_read_switcher_file() {
 				if [[ -z "${group}" || ! "${priority:=0}" =~ ^[0-9]+$ || \
 					"$(sed 's/-//g; s/_//g' <<< "${group}${name}")" =~ [[:punct:]] || \
 					"${group}${name}" =~ " " ]] || \
-					grep -Eq "(^|/|:| )(/|:| |$)" <<< "${points[@]}" || \
-					(($(grep -o ':' <<< "${points[@]}" | wc -l) != ${#points[@]})); then
+					grep -Eq "(^|/|:| )(/|:| |$)" <<< "${associations[@]}" || \
+					(($(grep -o ':' <<< "${associations[@]}" | wc -l) != ${#associations[@]})); then
 					exit 1
 				fi
 				awk -v RS=" " \
@@ -172,7 +173,7 @@ _ps_read_switcher_file() {
 					-v priority="${priority:=0}" \
 					-v prefix="${_ps_prefix}" \
 					'{split($1,path,":"); print group ":" switcher ":" priority ":" prefix "/" path[1] ":" prefix "/" path[2]}' \
-					<<< "${points[@]}"
+					<<< "${associations[@]}"
 			)) || error+=("${group:=[unknown]}:${name}:syntax")
 		done
 	done
@@ -191,25 +192,25 @@ _ps_read_switcher_file() {
 }
 
 _ps_read_enabled_switchers() {
-	_ps_enabled_sw=($(for point in $(find "${_ps_enabled_switchers_path}" -mindepth 1 -type f); do
-		point="${point//${_ps_enabled_switchers_path}\//}"
-		awk -v point="${point//\//:}" -F "=" '{if ($1 == "point") print point ":" $2}' "${_ps_enabled_switchers_path}/${point}"
+	_ps_enabled_sw=($(for association in $(find "${_ps_enabled_switchers_path}" -mindepth 1 -type f); do
+		association="${association//${_ps_enabled_switchers_path}\//}"
+		awk -v association="${association//\//:}" -F "=" '{if ($1 == "association") print association ":" $2}' "${_ps_enabled_switchers_path}/${association}"
 	done))
 }
 
-_ps_read_setted_switchers() {
-	_ps_setted_sw=($(find "${_ps_enabled_switchers_path}" -type l -exec readlink -fn {} \; -printf ':%f\n' | sed "s|${_ps_enabled_switchers_path}/||g; s|:.*:set:|:|g; s|/|:|g"))
+_ps_read_selected_switchers() {
+	_ps_selected_sw=($(find "${_ps_enabled_switchers_path}" -type l -exec readlink -fn {} \; -printf ':%f\n' | sed "s|${_ps_enabled_switchers_path}/||g; s|:.*:select:|:|g; s|/|:|g"))
 }
 
-_ps_get_setted_switchers() {
-	grep -E ${@} "^($(tr ' ' '|' <<< "${_ps_setted_sw[@]%:*}")):" || true
+_ps_get_selected_switchers() {
+	grep -E ${@} "^($(tr ' ' '|' <<< "${_ps_selected_sw[@]%:*}")):" || true
 }
 
 _ps_get_enabled_switcher() {
 	local i=1 goal=$# notfound=() list=$(tr ' ' '\n' <<< "${_ps_enabled_sw[@]}") result=() type="enabled"
-	if ${_ps_select_setted_sw}; then
-		list=$(_ps_get_setted_switchers <<< "${list}")
-		type="setted"
+	if ${_ps_select_selected_sw}; then
+		list=$(_ps_get_selected_switchers <<< "${list}")
+		type="selected"
 	fi
 	while (($# >= 1)); do
 		_ps_progress "${i}" "${goal}" "getting ${type} switchers"
@@ -247,7 +248,7 @@ _ps_check_checksum_switcher() {
 _ps_check_switcher_data_integrity() {
 	local i=0 goal="$#"
 	while (($# >= 1)); do
-		_ps_progress "$((i+1))" "${goal}" "checking switcher datas for integrity"
+		_ps_progress "$((i+1))" "${goal}" "checking switcher data integrity"
 		awk -v i="${i}" '{
 			if (!(split($0, data, ":") == 5 &&
 				data[1] != "" && gsub("-", "", data[1])+1 && gsub("_", "", data[1])+1 && data[1] !~ "[[:punct:]]" &&
@@ -282,7 +283,7 @@ _ps_check_existence_root_path() {
 }
 
 _ps_check_existence_link_path() {
-	local i=0 goal="$#" list="$(tr ' ' '\n' <<< "${@} $(_ps_return_enabled_switcher | _ps_get_setted_switchers | awk -F ':' '{print $4}')")"
+	local i=0 goal="$#" list="$(tr ' ' '\n' <<< "${@} $(_ps_return_enabled_switcher | _ps_get_selected_switchers | awk -F ':' '{print $4}')")"
 	while (($# >= 1)); do
 		_ps_progress "$((i+1))" "${goal}" "checking link paths for existence"
 		if [ -f "${1}" ] && ! (($(grep -c "^${1}$" <<< "${list}") > 1)); then
@@ -296,11 +297,11 @@ _ps_check_existence_link_path() {
 
 _ps_check_conflict_link_path() {
 	local i=0 goal=$((${#}/2+1))
-	local d_points="$(_ps_merge_datas 2 ${@} | sort -u)"
-	local e_points="$(_ps_return_enabled_switcher | awk -F ':' '!a[$1 ":" $4]++ {print $1 ":" $4}' | grep -Ev "^($(awk -F ':' '!a[$1]++ {print $1}' <<< "${d_points}" | paste -sd '|')):")"
+	local d_associations="$(_ps_merge_data 2 ${@} | sort -u)"
+	local e_associations="$(_ps_return_enabled_switcher | awk -F ':' '!a[$1 ":" $4]++ {print $1 ":" $4}' | grep -Ev "^($(awk -F ':' '!a[$1]++ {print $1}' <<< "${d_associations}" | paste -sd '|')):")"
 	while (($# >= ${goal})); do
 		_ps_progress "$((i+1))" "$((goal-1))" "checking link paths for conflicts"
-		if (($(grep -c ":${!goal}$" <<< "${d_points}") > 1)) || grep -q ":${!goal}$" <<< "${e_points}"; then
+		if (($(grep -c ":${!goal}$" <<< "${d_associations}") > 1)) || grep -q ":${!goal}$" <<< "${e_associations}"; then
 			echo $i
 		fi
 		i=$((i+1))
@@ -309,7 +310,7 @@ _ps_check_conflict_link_path() {
 }
 
 _ps_check_conflict_enabled_switcher() {
-	local i=0 goal=$((${#}/2+1)) list="$(_ps_merge_datas 2 ${@} | sort -u)" old=""
+	local i=0 goal=$((${#}/2+1)) list="$(_ps_merge_data 2 ${@} | sort -u)" old=""
 	while (($# >= ${goal})); do
 		_ps_progress "$((i+1))" "$((goal-1))" "checking enabled switchers for conflicts"
 		local now="${1}:${!goal}"
@@ -325,7 +326,7 @@ _ps_check_conflict_enabled_switcher() {
 _ps_check_valid_link_path() {
 	local i=0 goal="$#"
 	while (($# >= 1)); do
-		_ps_progress "$((i+1))" "${goal}" "checking link paths for valid"
+		_ps_progress "$((i+1))" "${goal}" "checking link paths for validity"
 		if [ ! -d "${1%/*}" ]; then
 			echo $i
 		fi
@@ -336,8 +337,8 @@ _ps_check_valid_link_path() {
 
 _ps_check_dependent_switcher() {
 	local i=0 goal="$#" list="$(_ps_return_enabled_switcher)"
-	if [ "${operation:-}" = "unset" ] && ! ${_ps_unset_disable}; then
-		list="$(_ps_get_setted_switchers <<< "${list}")"
+	if [ "${operation:-}" = "reject" ] && ! ${_ps_reject_disable}; then
+		list="$(_ps_get_selected_switchers <<< "${list}")"
 	fi
 	list="$(awk -F ':' '{print $4 ":" $5}' <<< "${list}" | grep -Ev "^($(tr ' ' '|' <<< "${@}")):")"
 	while (($# >= 1)); do
@@ -351,7 +352,7 @@ _ps_check_dependent_switcher() {
 }
 
 _ps_check_duplicate_root_path() {
-	local args=($(_ps_merge_datas 3 ${@}))
+	local args=($(_ps_merge_data 3 ${@}))
 	local i=0 goal=$((${#args[@]})) list="$(_ps_return_enabled_switcher)"
 	while ((${i} < ${goal})); do
 		_ps_progress "$((i+1))" "${goal}" "checking root paths for duplicate"
@@ -382,9 +383,9 @@ _ps_check_switcher_by_algorithm() {
 	done
 }
 
-_ps_check_setted_switcher() {
-	_ps_check_switcher_by_algorithm '[[ " ${_ps_setted_sw[@]%:*}" =~ " ${sw}:" ]]' \
-		'checking for setted switchers' \
+_ps_check_selected_switcher() {
+	_ps_check_switcher_by_algorithm '[[ " ${_ps_selected_sw[@]%:*}" =~ " ${sw}:" ]]' \
+		'checking for selected switchers' \
 		${@}
 }
 
@@ -423,7 +424,7 @@ _ps_check_sw() {
 	local operation="$1"
 	shift 1
 	case "${operation}" in
-		"enable"|"set"|"disable"|"unset"|"query"|"install"|"remove");;
+		"enable"|"select"|"disable"|"reject"|"query"|"install"|"uninstall");;
 		*) _ps_error "internal error: unknown operation '${operation}' for _ps_check_sw"
 	esac
 
@@ -431,17 +432,17 @@ _ps_check_sw() {
 	if [ "${operation}" != "query" ]; then
 		local result_check_switcher_data_integrity=$(_ps_check_switcher_data_integrity ${@})
 		if [ -n "${result_check_switcher_data_integrity}" ]; then
-			if [[ "${operation}" = "enable" || "${operation}" = "set" || "${operation}" = "install" ]]; then
-				_ps_error_message "switcher datas are not integrity"
+			if [[ "${operation}" = "enable" || "${operation}" = "select" || "${operation}" = "install" ]]; then
+				_ps_error_message "switcher data integrity problem"
 			else
-				_ps_warning "found non-integrity switcher datas, will be ignored"
+				_ps_warning "found switcher data with an integrity problem, will be ignored"
 			fi
 			for i in ${result_check_switcher_data_integrity}; do
 				i=$((${i}+1))
 				_ps_non_integrity_sw+=("${!i}")
 				_ps_message "${!i}\n"
 			done
-			if [[ "${operation}" = "enable" || "${operation}" = "set" ]]; then
+			if [[ "${operation}" = "enable" || "${operation}" = "select" ]]; then
 				exit 1
 			fi
 		fi
@@ -464,7 +465,7 @@ _ps_check_sw() {
 		done
 		list_group=(${list_group[@]})
 		if [ "${#list_group[@]}" = "0" ]; then
-			_ps_warning "all switcher datas are not integrity, skip checking to remove corrupted data"
+			_ps_warning "all switcher data have integrity problems, skip checking to remove corrupted data"
 			return
 		fi
 		list_name=(${list_name[@]})
@@ -473,7 +474,7 @@ _ps_check_sw() {
 		list_root_path=(${list_root_path[@]})
 	fi
 
-	if [[ "${operation}" = "enable" || "${operation}" = "set" || "${operation}" = "query" || "${operation}" = "install" ]]; then
+	if [[ "${operation}" = "enable" || "${operation}" = "select" || "${operation}" = "query" || "${operation}" = "install" ]]; then
 		_ps_check_sw_eval existence_root_path '${list_link_path[@]} ${list_root_path[@]}' 'invalid root paths' \
 			'${list_root_path[$i]} not found for ${list_link_path[$i]##*/}'
 		_ps_check_sw_eval valid_link_path '${list_link_path[@]}' 'not valid link paths' \
@@ -488,7 +489,7 @@ _ps_check_sw() {
 			'${list_link_path[$i]} conflicts'
 		;;
 
-		"set")
+		"select")
 		if ! ${_ps_overwrite}; then
 			_ps_check_sw_eval existence_link_path '${list_link_path[@]}' 'link path conflicts' \
 				'${list_link_path[$i]} exists in filesystem'
@@ -497,40 +498,40 @@ _ps_check_sw() {
 		;;
 
 		"disable")
-		if ! ${_ps_disable_unset}; then
-			_ps_check_sw_eval setted_switcher '${list_group[@]} ${list_name[@]}' 'impossible disable setted switcher' 'setted'
+		if ! ${_ps_disable_reject}; then
+			_ps_check_sw_eval selected_switcher '${list_group[@]} ${list_name[@]}' 'impossible disable selected switcher' 'selected'
 		fi
 		;;
 
-		"remove")
+		"uninstall")
 		_ps_check_sw_eval enabled_switcher '${list_group[@]} ${list_name[@]}' 'impossible delete switcher file when its enabled' 'enabled'
 		;;
 	esac
 
-	if [[ "${operation}" = "disable" || "${operation}" = "unset" ]]; then
+	if [[ "${operation}" = "disable" || "${operation}" = "reject" ]]; then
 		_ps_check_sw_eval dependent_switcher '${list_link_path[@]}' 'switcher presents dependency' 'needed'
-	elif [[ "${operation}" = "install" || "${operation}" = "remove" ]]; then
+	elif [[ "${operation}" = "install" || "${operation}" = "uninstall" ]]; then
 		_ps_check_sw_eval switcher_belong_pkg '${list_group[@]} ${list_name[@]}' "impossible ${operation} switcher file belongs to pkg" 'belongs'
 	elif [ "${operation}" = "query" ]; then
 		echo ${list_index_issue[@]}
 	fi
 }
 
-_ps_get_mode_by_setted_sw() {
-	local len="${#_ps_static_setted_sw[@]}"
+_ps_get_mode_by_selected_sw() {
+	local len="${#_ps_static_selected_sw[@]}"
 	[ "${len}" = "0" ] && return 1
-	awk -F ':' -v RS=" " -v gr="${1}" -v len="${len}" '{if ($1 == gr) {print $3; exit 0} else if (NR == len) {exit 1} }' <<< "${_ps_static_setted_sw[@]}"
+	awk -F ':' -v RS=" " -v gr="${1}" -v len="${len}" '{if ($1 == gr) {print $3; exit 0} else if (NR == len) {exit 1} }' <<< "${_ps_static_selected_sw[@]}"
 }
 
-_ps_action_sw_point() {
+_ps_action_association() {
 	local operation="$1"
 	shift 1
 	case "${operation}" in
-		"enable"|"set"|"disable"|"unset"|"query");;
-		*) _ps_error "internal error: unknown operation '${operation}' for _ps_action_sw_point"
+		"enable"|"update"|"disable"|"install"|"remove"|"query");;
+		*) _ps_error "internal error: unknown operation '${operation}' for _ps_action_association"
 	esac
 
-	local old_sw_point i goal args=$(tr ' ' '\n' <<< "$@") mode=$(${_ps_automode} && echo "auto" || echo "manual") group name priority link_path root_path
+	local old_association i goal args=$(tr ' ' '\n' <<< "$@") mode=$(${_ps_automode} && echo "auto" || echo "manual") group name priority link_path root_path
 
 	while (($# >= 1)); do
 		eval "$(awk -F ':' '{
@@ -542,55 +543,55 @@ _ps_action_sw_point() {
 		}' <<< "${1}")"
 
 		local switcher="${group}:${name}"
-		local sw_point="${group}/${name}:${priority}"
+		local association="${group}/${name}:${priority}"
 		local group_path="${_ps_enabled_switchers_path}/${group}"
-		local point_path="${_ps_enabled_switchers_path}/${sw_point}"
+		local association_path="${_ps_enabled_switchers_path}/${association}"
 
-		if [ "${old_sw_point}" != "${sw_point}" ]; then
+		if [ "${old_association}" != "${association}" ]; then
 			i=1
 			goal=$(grep -c "^${switcher}:" <<< "${args}")
 			if ${_ps_selfmode}; then
-				mode=$(_ps_get_mode_by_setted_sw "${group}" || echo "${mode}")
+				mode=$(_ps_get_mode_by_selected_sw "${group}" || echo "${mode}")
 			fi
 		fi
 
 		case "${operation}" in
-			"enable")
-			_ps_progress "${i}" "${goal}" "writing points ${switcher}"
-			if [ "${old_sw_point}" != "${sw_point}" ]; then
+			"enable"|"update")
+			_ps_progress "${i}" "${goal}" "${operation::-1}ing associations for ${switcher}"
+			if [ "${old_association}" != "${association}" ]; then
 				if [ ! -d "${group_path}" ]; then
 					mkdir -p "${group_path}"
 				else
 					find "${group_path}" -type f -name "${name}:*" -delete
 				fi
-				_ps_get_checksum_switcher "${_ps_switcher_files_path}/${name}.sw" > "${point_path}"
+				_ps_get_checksum_switcher "${_ps_switcher_files_path}/${name}.sw" > "${association_path}"
 			fi
-			echo "point=${link_path}:${root_path}" >> "${point_path}"
+			echo "association=${link_path}:${root_path}" >> "${association_path}"
 			;;
 
-			"set")
-			_ps_progress "${i}" "${goal}" "setting points ${switcher}"
-			if [ "${old_sw_point}" != "${sw_point}" ]; then
-				local setted=$(tr ' ' '\n' <<< "${_ps_setted_sw[@]%:*}" | grep "^${group}:")
-				if [ -n "${setted}" ]; then
-					_ps_nomessage=true _ps_action_sw_point "unset" $(_ps_nomessage=true _ps_get_enabled_switcher ${setted})
+			"install")
+			_ps_progress "${i}" "${goal}" "installing associations for ${switcher}"
+			if [ "${old_association}" != "${association}" ]; then
+				local selected=$(tr ' ' '\n' <<< "${_ps_selected_sw[@]%:*}" | grep "^${group}:")
+				if [ -n "${selected}" ]; then
+					_ps_nomessage=true _ps_action_association "remove" $(_ps_nomessage=true _ps_get_enabled_switcher ${selected})
 				fi
-				ln -sr "${point_path}" "${group_path}/set:${mode}"
+				ln -sr "${association_path}" "${group_path}/select:${mode}"
 			fi
 			ln -s $(${_ps_overwrite} && echo "-f") "${root_path}" "${link_path}"
 			;;
 
 			"disable")
-			_ps_progress "${i}" "${goal}" "disabling points ${switcher}"
-			if [ "${old_sw_point}" != "${sw_point}" ]; then
-				rm -f "${point_path}"
+			_ps_progress "${i}" "${goal}" "disabling associations for ${switcher}"
+			if [ "${old_association}" != "${association}" ]; then
+				rm -f "${association_path}"
 			fi
 			;;
 
-			"unset")
-			_ps_progress "${i}" "${goal}" "unsetting points ${switcher}"
-			if [ "${old_sw_point}" != "${sw_point}" ]; then
-				rm -f "${group_path}/set:"*
+			"remove")
+			_ps_progress "${i}" "${goal}" "removing associations for ${switcher}"
+			if [ "${old_association}" != "${association}" ]; then
+				rm -f "${group_path}/select:"*
 			fi
 			if [[ ! " ${_ps_non_integrity_sw[@]} " =~ " ${1} " ]]; then
 				rm -f "${link_path}"
@@ -599,9 +600,9 @@ _ps_action_sw_point() {
 
 			"query")
 			if [[ ! " ${_ps_non_integrity_sw[@]} " =~ " ${1} " ]]; then
-				if [[ "${old_sw_point}" != "${sw_point}" && "${mode}" = "auto" && \
+				if [[ "${old_association}" != "${association}" && "${mode}" = "auto" && \
 					"$(_ps_return_enabled_switcher | awk -F ':' -v group="${group}" '{if ( group == $1 && int($3) == $3 && i < $3) i = $3} END {print i}')" != "${priority}" ]]; then
-					_ps_error_message "setted switcher ${switcher} does not have maximum priority"
+					_ps_error_message "selected switcher ${switcher} does not have maximum priority"
 					echo "${switcher}"
 				fi
 				if ! [[ -L "${link_path}" && "$(readlink ${link_path})" = "${root_path}" ]]; then
@@ -612,13 +613,13 @@ _ps_action_sw_point() {
 			;;
 		esac
 
-		old_sw_point="${sw_point}"
+		old_association="${association}"
 		i=$((i+1))
 		shift 1
 	done
 
 	case "${operation}" in
-		"set"|"unset") _ps_read_setted_switchers;;
+		"select"|"reject") _ps_read_selected_switchers;;
 	esac
 
 	if [ "${operation}" = "disable" ]; then
@@ -650,7 +651,7 @@ _ps_choose_sw_by_priority() {
 	return 1
 }
 
-_ps_choose_sw_to_set() {
+_ps_select_sw() {
 	local list="$(tr ' ' '\n' <<< "${@}" | sort -u)" sw sws swi swi_s mode=$(${_ps_automode} && echo "auto" || echo "manual") ghost_sw=()
 	for sw in $(awk -F ':' '!a[$1]++ {print $1}' <<< "${list}"); do
 		sws=($(grep "^${sw}:" <<< "${list}" | awk -F ':' '!a[$2 ":" $3]++ {print $2 ":" $3}'))
@@ -669,7 +670,7 @@ _ps_choose_sw_to_set() {
 		if (("${#sws[@]}" > 1)); then
 			swi_s=""
 			if ${_ps_selfmode}; then
-				mode=$(_ps_get_mode_by_setted_sw "${sw}" || echo "${mode}")
+				mode=$(_ps_get_mode_by_selected_sw "${sw}" || echo "${mode}")
 			fi
 			if [ "${mode}" = "manual" ]; then
 				_ps_info "There are ${#sws[@]} enabled switchers in group ${_ps_blue}${sw}${_ps_bold}:"
@@ -695,7 +696,7 @@ _ps_choose_sw_to_set() {
 			fi
 			if [ -z "${swi_s}" ]; then
 				for swi in ${!sws[@]}; do
-					_ps_progress "$((swi+1))" "${#sws[@]}" "Auto-choosing switchers ${sw}:* by priority"
+					_ps_progress "$((swi+1))" "${#sws[@]}" "Auto-selecting switchers ${sw}:* by priority"
 					if [ -z "${swi_s}" ] || _ps_choose_sw_by_priority "${sw}" "${sws[${swi}]}" "${sws[${swi_s}]}"; then
 						swi_s="${swi}"
 					fi
@@ -712,10 +713,10 @@ _ps_choose_sw_to_set() {
 		exit 1
 	fi
 
-	for sw in $(_ps_get_setted_switchers -o <<< "${list}" | sort -u); do
+	for sw in $(_ps_get_selected_switchers -o <<< "${list}" | sort -u); do
 		sw="${sw::-1}"
 		if [ "${operation}" != "enable" ] || _ps_check_checksum_switcher "${sw}"; then
-			_ps_warning "switcher ${sw} is already setted"
+			_ps_warning "switcher ${sw} is already selected"
 			if ${_ps_needed}; then
 				list=$(sed "/^${sw}:/d" <<< "${list}")
 			fi
@@ -724,7 +725,7 @@ _ps_choose_sw_to_set() {
 	if [ -n "${ghost_sw}" ] && ! ${_PS_RUN_IN_ALPM_HOOKS}; then
 		ghost_sw=($(awk -F ':' '{print $1 ":" $2}' <<< "${list}" | sort -u | grep -E ":($(tr ' ' '|' <<< "${ghost_sw[@]}"))"))
 		if [ -n "${ghost_sw}" ]; then
-			_ps_info "Ghost switchers are going to be setted:"
+			_ps_info "Ghost switchers are going to be selected:"
 			for sw in ${ghost_sw[@]}; do
 				_ps_message "  ${_ps_bold}${sw}${_ps_nostyle}\n"
 			done
@@ -756,7 +757,7 @@ _ps_question_to_continue() {
 _ps_notify_about_sw_and_get_confirm() {
 	${_PS_RUN_IN_ALPM_HOOKS} && return
 
-	_ps_info "The following switcher points will be ${1}:"
+	_ps_info "The following switcher will be ${1}:"
 	awk -F ':' -v bold="${_ps_bold}" -v nostyle="${_ps_nostyle}" '{
 		if (sw != $1 ":" $2) {
 			sw = $1 ":" $2
@@ -788,16 +789,16 @@ _ps_enable() {
 	data_sw=$(_ps_read_switcher_file ${@})
 
 	_ps_commit "Checking switchers status for enabling"
-	local sw sw_set=() sw_reset=()
-	if ${_ps_enable_set}; then
-		sw_set+=(${data_sw})
+	local sw sw_select=() sw_reselect=()
+	if ${_ps_enable_select}; then
+		sw_select+=(${data_sw})
 	fi
 	local sws=$(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw}")
 	for sw in ${sws}; do
-		if ! ${_ps_enable_set} && ! [[ " ${sw_set[@]}" =~ " ${sw%%:*}:" ]]; then
-			if [ "$(_ps_get_mode_by_setted_sw "${sw%%:*}")" = "auto" ]; then
-				_ps_warning "switcher group ${sw%%:*} is on auto mode, resetting needed"
-				sw_set+=($(grep "^${sw%%:*}:" <<< "${data_sw}"))
+		if ! ${_ps_enable_select} && ! [[ " ${sw_select[@]}" =~ " ${sw%%:*}:" ]]; then
+			if [ "$(_ps_get_mode_by_selected_sw "${sw%%:*}")" = "auto" ]; then
+				_ps_warning "switcher group ${sw%%:*} is on auto mode, reselecting needed"
+				sw_select+=($(grep "^${sw%%:*}:" <<< "${data_sw}"))
 			else
 				sws=$(sed "/^${sw%%:*}:/d" <<< "${sws}")
 			fi
@@ -808,35 +809,35 @@ _ps_enable() {
 				if ${_ps_needed}; then
 					data_sw=$(sed "/^${sw}:/d" <<< "${data_sw}")
 				fi
-			elif ! ${_ps_enable_set} && [[ " ${_ps_setted_sw[@]%:*} " =~ " ${sw} " ]]; then
-				_ps_warning "switcher ${sw} requires resetting"
-				sw_reset+=($(grep "^${sw}:" <<< "${data_sw}"))
+			elif ! ${_ps_enable_select} && [[ " ${_ps_selected_sw[@]%:*} " =~ " ${sw} " ]]; then
+				_ps_warning "switcher ${sw} requires reselecting"
+				sw_reselect+=($(grep "^${sw}:" <<< "${data_sw}"))
 			fi
 		fi
 	done
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Checking switchers status for setting"
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Checking switchers status for selecting"
 		if ${_ps_automode}; then
 			for sw in $(awk -F ':' '!a[$1]++ {print $1}' <<< "${sws}"); do
-				if [ "$(_ps_get_mode_by_setted_sw "${sw}")" = "manual" ]; then
-					_ps_warning "switcher group ${sw} is on manual mode, setting canceled"
+				if [ "$(_ps_get_mode_by_selected_sw "${sw}")" = "manual" ]; then
+					_ps_warning "switcher group ${sw} is on manual mode, selecting canceled"
 					sws=$(sed "/^${sw}:/d" <<< "${sws}")
 				fi
 			done
-			sw_set=($(tr ' ' '\n' <<< "${sw_set[@]}" | grep -E "^($(paste -sd '|' <<< ${sws})):" || true))
+			sw_select=($(tr ' ' '\n' <<< "${sw_select[@]}" | grep -E "^($(paste -sd '|' <<< ${sws})):" || true))
 		fi
 		if [ -n "${sws}" ]; then
-			sw_set=($(_ps_needed=true _ps_choose_sw_to_set ${sw_set[@]} $(_ps_sw_analog_by_group ${sws})))
+			sw_select=($(_ps_needed=true _ps_select_sw ${sw_select[@]} $(_ps_sw_analog_by_group ${sws})))
 		else
-			sw_set=()
+			sw_select=()
 		fi
 	fi
-	sw_set+=(${sw_reset[@]})
-	if ${_ps_needed} && [[ -z "${data_sw}" && -z "${sw_set}" ]]; then
+	sw_select+=(${sw_reselect[@]})
+	if ${_ps_needed} && [[ -z "${data_sw}" && -z "${sw_select}" ]]; then
 		_ps_nothing_to_do
 	fi
-	if [[ -n "${data_sw}" && -n "${sw_set}" ]]; then
-		data_sw="$(tr ' ' '\n' <<< "${sw_set[@]}"; grep -Ev "^($(tr ' ' '|' <<< "${sw_set[@]}"))$" <<< "${data_sw}" || true)"
+	if [[ -n "${data_sw}" && -n "${sw_select}" ]]; then
+		data_sw="$(tr ' ' '\n' <<< "${sw_select[@]}"; grep -Ev "^($(tr ' ' '|' <<< "${sw_select[@]}"))$" <<< "${data_sw}" || true)"
 	fi
 
 	if [ -n "${data_sw}" ]; then
@@ -844,19 +845,19 @@ _ps_enable() {
 		_ps_check_sw "enable" ${data_sw}
 	fi
 
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Checking switchers for setting"
-		_ps_check_sw "set" ${sw_set[@]}
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Checking switchers for selecting"
+		_ps_check_sw "select" ${sw_select[@]}
 	fi
 
 	if [ -n "${data_sw}" ]; then
-		_ps_commit "Writing points"
-		_ps_action_sw_point "enable" ${data_sw}
+		_ps_commit "Enabling associations"
+		_ps_action_association "enable" ${data_sw}
 	fi
 
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Setting points"
-		_ps_action_sw_point "set" ${sw_set[@]}
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Installing associations"
+		_ps_action_association "install" ${sw_select[@]}
 	fi
 }
 
@@ -886,33 +887,33 @@ _ps_disable() {
 	_ps_commit "Checking switchers for disabling"
 	_ps_check_sw "disable" ${data_sw}
 
-	local unset_sw
-	if ${_ps_disable_unset}; then
-		unset_sw=$(_ps_select_setted_sw=true _ps_noerror=true _ps_nomessage=true _ps_get_enabled_switcher ${sws[@]} || true)
-		if ! (${_ps_disable_ghost} || ${_ps_automode}) && [ -z "${unset_sw}" ]; then
-			_ps_warning "no switchers found that need unset"
+	local reject_sw
+	if ${_ps_disable_reject}; then
+		reject_sw=$(_ps_select_selected_sw=true _ps_noerror=true _ps_nomessage=true _ps_get_enabled_switcher ${sws[@]} || true)
+		if ! (${_ps_disable_ghost} || ${_ps_automode}) && [ -z "${reject_sw}" ]; then
+			_ps_warning "no switchers found that need rejecting"
 		fi
 	fi
-	local set_sw
+	local select_sw
 	if ${_ps_automode}; then
-		_ps_commit "Checking switchers status for setting"
+		_ps_commit "Checking switchers status for selecting"
 		for sw in ${!sws[@]}; do
-			if [ "$(_ps_get_mode_by_setted_sw ${sws[${sw}]%:*})" != "auto" ]; then
-				_ps_warning "switcher group ${sws[${sw}]%:*} is on manual mode, resetting canceled"
+			if [ "$(_ps_get_mode_by_selected_sw ${sws[${sw}]%:*})" != "auto" ]; then
+				_ps_warning "switcher group ${sws[${sw}]%:*} is on manual mode, reselecting canceled"
 				unset sws[${sw}]
 			fi
 		done
-		set_sw=$(_ps_needed=true _ps_choose_sw_to_set $(_ps_sw_analog_by_group ${sws[@]}))
-		if [ -n "${set_sw}" ]; then
-			_ps_commit "Checking switchers for setting"
-			_ps_check_sw "set" ${set_sw}
+		select_sw=$(_ps_needed=true _ps_select_sw $(_ps_sw_analog_by_group ${sws[@]}))
+		if [ -n "${select_sw}" ]; then
+			_ps_commit "Checking switchers for selecting"
+			_ps_check_sw "select" ${select_sw}
 		fi
 	fi
 
 	_ps_notify_about_sw_and_get_confirm "disabled" "${data_sw}" \
-		"The following switchers will be unsetted" \
-		"$([ -n "${unset_sw}" ] && awk -F ':' '{ if (sw != $1 ":" $2) {sw = $1 ":" $2; print "  " sw}}' <<< "${unset_sw}" || true)" \
-		"The following switchers will be setted" \
+		"The following switchers will be rejected" \
+		"$([ -n "${reject_sw}" ] && awk -F ':' '{ if (sw != $1 ":" $2) {sw = $1 ":" $2; print "  " sw}}' <<< "${reject_sw}" || true)" \
+		"The following switchers will be selected" \
 		"$(awk -F ':' -v sws="$(tr ' ' ',' <<< ${sws[@]})" '{ if ($1 != "" && $2 != "") !a[$1 ":" $2]++ } END {
 			split(sws, sws_array, ",")
 			for (i in a) {
@@ -921,23 +922,23 @@ _ps_disable() {
 					if (sws_array[j] ~ i_array[1] ":")
 						print "  " sws_array[j] " -> " i
 			}
-		}' <<< "${set_sw}")"
+		}' <<< "${select_sw}")"
 
-	if [ -n "${unset_sw}" ]; then
-		_ps_commit "Unsetting points"
-		_ps_action_sw_point "unset" ${unset_sw}
+	if [ -n "${reject_sw}" ]; then
+		_ps_commit "Removing associations"
+		_ps_action_association "remove" ${reject_sw}
 	fi
 
-	_ps_commit "Disabling points"
-	_ps_action_sw_point "disable" ${data_sw}
+	_ps_commit "Disabling associations"
+	_ps_action_association "disable" ${data_sw}
 
-	if [ -n "${set_sw}" ]; then
-		_ps_commit "Setting points"
-		_ps_action_sw_point "set" ${set_sw}
+	if [ -n "${select_sw}" ]; then
+		_ps_commit "Installing associations"
+		_ps_action_association "install" ${select_sw}
 	fi
 }
 
-_ps_set() {
+_ps_select() {
 	_ps_commit "Getting enabled switchers"
 	local data_sw
 	if [[ -z "${@}" ]]; then
@@ -946,8 +947,8 @@ _ps_set() {
 		data_sw=$(_ps_get_enabled_switcher ${@})
 	fi
 
-	_ps_commit "Checking switchers status for $(${_ps_updatemode} && echo "updating" || echo "setting")"
-	local sws=() sw_set=() sw
+	_ps_commit "Checking switchers status for $(${_ps_updatemode} && echo "updating" || echo "selecting")"
+	local sws=() sw_select=() sw
 	if ${_ps_updatemode}; then
 		sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw}"))
 		for sw in ${!sws[@]}; do
@@ -957,61 +958,61 @@ _ps_set() {
 			fi
 		done
 	else
-		sw_set=($(_ps_choose_sw_to_set ${data_sw}))
+		sw_select=($(_ps_select_sw ${data_sw}))
 	fi
-	if (${_ps_updatemode} && [[ -z "${sws[@]}" ]]) || (${_ps_needed} && [ -z "${sw_set}" ]); then
+	if (${_ps_updatemode} && [[ -z "${sws[@]}" ]]) || (${_ps_needed} && [ -z "${sw_select}" ]); then
 		_ps_nothing_to_do
 	fi
 	if ${_ps_updatemode}; then
 		data_sw=$(_ps_read_switcher_file ${sws[@]})
-		sw_set=$(_ps_get_setted_switchers <<< "${data_sw}")
+		sw_select=$(_ps_get_selected_switchers <<< "${data_sw}")
 	fi
 
 	if ${_ps_updatemode} && [ -n "${data_sw}" ]; then
-		_ps_commit "Checking switchers for enabling"
+		_ps_commit "Checking switchers for updating"
 		_ps_check_sw "enable" ${data_sw}
 	fi
 
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Checking switchers for setting"
-		_ps_check_sw "set" ${sw_set[@]}
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Checking switchers for selecting"
+		_ps_check_sw "select" ${sw_select[@]}
 	fi
 
 	if ${_ps_updatemode} && [ -n "${data_sw}" ]; then
-		_ps_commit "Writing points"
-		_ps_action_sw_point "enable" ${data_sw}
+		_ps_commit "Updating associations"
+		_ps_action_association "update" ${data_sw}
 	fi
 
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Setting points"
-		_ps_action_sw_point "set" ${sw_set[@]}
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Installing associations"
+		_ps_action_association "install" ${sw_select[@]}
 	fi
 }
 
-_ps_unset() {
-	if ! ${_ps_automode} && ${_ps_unset_disable}; then
+_ps_reject() {
+	if ! ${_ps_automode} && ${_ps_reject_disable}; then
 		_ps_selfmode=true
 	fi
 
-	_ps_commit "Getting setted switchers"
+	_ps_commit "Getting selected switchers"
 	local data_sw
-	data_sw=$(_ps_select_setted_sw=true _ps_get_enabled_switcher ${@})
+	data_sw=$(_ps_select_selected_sw=true _ps_get_enabled_switcher ${@})
 
-	_ps_commit "Checking switchers for unsetting"
-        _ps_check_sw "unset" ${data_sw}
+	_ps_commit "Checking switchers for rejecting"
+        _ps_check_sw "reject" ${data_sw}
 
-	local sws sw_set sw
-	if ${_ps_unset_replace}; then
+	local sws sw_select sw
+	if ${_ps_reject_replace}; then
 		_ps_commit "Searching for alternatives for switchers"
 		sws=$(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw}")
-		sw_set=$(_ps_choose_sw_to_set $(_ps_sw_analog_by_group ${sws}))
-		for sw in $(grep -Ev "^$(awk -F ':' '!a[$1]++ {print $1}' <<< "${sw_set}" | paste -sd '|'):" <<< "${sws}"); do
+		sw_select=$(_ps_select_sw $(_ps_sw_analog_by_group ${sws}))
+		for sw in $(grep -Ev "^$(awk -F ':' '!a[$1]++ {print $1}' <<< "${sw_select}" | paste -sd '|'):" <<< "${sws}"); do
 			_ps_warning "could not find alternative to ${sw} switcher"
 		done
 	fi
 
-	_ps_notify_about_sw_and_get_confirm "unsetted$(${_ps_unset_disable} && echo " and disabled" || true)" "${data_sw}" \
-		"The following switchers will be setted as an alternative to unsetted switchers" \
+	_ps_notify_about_sw_and_get_confirm "rejected$(${_ps_reject_disable} && echo " and disabled" || true)" "${data_sw}" \
+		"The following switchers will be selected as an alternative to rejected switchers" \
 		"$(awk -F ':' -v sws="$(paste -sd ',' <<< ${sws})" '{ if ($1 != "" && $2 != "") !a[$1 ":" $2]++ } END {
 			split(sws, sws_array, ",")
 			for (i in a) {
@@ -1020,19 +1021,19 @@ _ps_unset() {
 					if (sws_array[j] ~ i_array[1] ":")
 						print "  " sws_array[j] " -> " i
 			}
-		}' <<< "${sw_set}")"
+		}' <<< "${sw_select}")"
 
-	_ps_commit "Unsetting points"
-	_ps_action_sw_point "unset" ${data_sw}
+	_ps_commit "Removing associations"
+	_ps_action_association "remove" ${data_sw}
 
-	if ${_ps_unset_disable}; then
-		_ps_commit "Disabling points"
-		_ps_action_sw_point "disable" ${data_sw}
+	if ${_ps_reject_disable}; then
+		_ps_commit "Disabling associations"
+		_ps_action_association "disable" ${data_sw}
 	fi
 
-	if [ -n "${sw_set}" ]; then
-		_ps_commit "Setting alternative points"
-		_ps_action_sw_point "set" ${sw_set}
+	if [ -n "${sw_select}" ]; then
+		_ps_commit "Installing alternative associations"
+		_ps_action_association "install" ${sw_select}
 	fi
 }
 
@@ -1081,17 +1082,17 @@ _ps_query() {
 				if (sw != "")
 					print ""
 				sw = $1 ":" $2
-				print bold "Switcher" nostyle "  : " (($2 == "") ? "[unknown]" : $2)
-				print bold "Group" nostyle "     : " (($1 == "") ? "[unknown]" : $1)
-				print bold "Priority" nostyle "  : " (($3 == "") ? "[unknown]" : $3)
-				printf bold "Ghost" nostyle "     : "
+				print bold "Switcher" nostyle "      : " (($2 == "") ? "[unknown]" : $2)
+				print bold "Group" nostyle "         : " (($1 == "") ? "[unknown]" : $1)
+				print bold "Priority" nostyle "      : " (($3 == "") ? "[unknown]" : $3)
+				printf bold "Ghost" nostyle "         : "
 				if (system("test -f " sw_files_path $2 ".sw"))
 					print "Yes"
 				else
 					print "No"
-				printf bold "Points" nostyle "    : "
+				printf bold "Associations" nostyle "  : "
 			} else {
-				printf "            "
+				printf "                "
 			}
 			gsub(prefix, "", $4)
 			gsub(prefix, "", $5)
@@ -1101,18 +1102,18 @@ _ps_query() {
 			print ""
 		}' <<< "${data_sw}"
 	elif ${_ps_guery_check}; then
-		_ps_commit "Checking switcher datas for integrity"
+		_ps_commit "Checking switcher data integrity"
 		data_sw=(${data_sw})
 		for sw in $(_ps_nomessage=true _ps_check_switcher_data_integrity ${_ps_enabled_sw[@]}); do
-			_ps_error_message "switcher data is not integrity: ${_ps_enabled_sw[${sw}]}"
+			_ps_error_message "switcher data has an integrity problem: ${_ps_enabled_sw[${sw}]}"
 			_ps_non_integrity_sw+=("${_ps_enabled_sw[${sw}]}")
 			data_sw=($(sed "s| ${_ps_enabled_sw[${sw}]} | |" <<< " ${data_sw[@]} "))
 		done
 		if [[ "${#data_sw[@]}" = "0" ]]; then
-			_ps_error "all switcher datas is not integrity"
+			_ps_error "all switcher data have integrity problems"
 		fi
 
-		_ps_commit "Comparing switcher datas with datas from switcher files"
+		_ps_commit "Comparing switcher data with data from switcher files"
 		sws=($(awk -F ':' -v RS=' ' '!a[$1 ":" $2]++ {print $1 ":" $2}' <<< "${data_sw[@]}"))
 		local data_file fail_checksum fail_diff issue_data=()
 		for sw in ${sws[@]}; do
@@ -1129,11 +1130,11 @@ _ps_query() {
 						fail_checksum=true
 					fi
 					if ! diff <(tr ' ' '\n' <<< "${data_sw[@]}" | grep "^${sw}:" | sort) <(sort <<< "${data_file}") > /dev/null 2>&1; then
-						_ps_warning "there are differences in datas with switcher file ${sw}"
+						_ps_warning "there are differences in data with switcher file ${sw}"
 						fail_diff=true
 					fi
 					if ! ${fail_checksum} && ${fail_diff}; then
-						_ps_error_message "switcher datas ${sw} has changes that are not committed by checksum"
+						_ps_error_message "switcher data ${sw} has changes that are not committed by checksum"
 						issue_data+=("${sw}")
 					fi
 				fi
@@ -1143,20 +1144,20 @@ _ps_query() {
 			fi
 		done
 
-		_ps_commit "Checking for switcher points"
+		_ps_commit "Checking for switcher associations"
 		local issue_env=($(_ps_check_sw "query" ${data_sw[@]}))
 
-		_ps_commit "Checking setted switchers"
-		local issue_set=($(_ps_selfmode=true _ps_action_sw_point "query" $(tr ' ' '\n' <<< ${data_sw[@]} | _ps_get_setted_switchers) | sort -u))
+		_ps_commit "Checking selected switchers"
+		local issue_select=($(_ps_selfmode=true _ps_action_association "query" $(tr ' ' '\n' <<< ${data_sw[@]} | _ps_get_selected_switchers) | sort -u))
 
 		_ps_info "Check result:"
-		if [[ -z "${_ps_non_integrity_sw}" && -z "${issue_data}" && -z "${issue_env}" && -z "${issue_set}" ]]; then
+		if [[ -z "${_ps_non_integrity_sw}" && -z "${issue_data}" && -z "${issue_env}" && -z "${issue_select}" ]]; then
 			_ps_nothing_to_do
 		fi
-		_ps_query_print_result "_ps_non_integrity_sw" "found switcher data that is not integrity, such data skips checking" '${sw}'
-		_ps_query_print_result "issue_data" "found problems with verification of switcher datas" '${sw}'
+		_ps_query_print_result "_ps_non_integrity_sw" "found switcher data that have integrity problems, such data skips checking" '${sw}'
+		_ps_query_print_result "issue_data" "found problems with verification of switcher data" '${sw}'
 		_ps_query_print_result "issue_env" "found switchers that have environmental problems" '${data_sw[${sw}]}'
-		_ps_query_print_result "issue_set" "found switchers that have problems with setted points" '${sw}'
+		_ps_query_print_result "issue_select" "found switchers that have problems with selected associations" '${sw}'
 	else
 		sws=($(awk -F ':' '!a[$1 ":" $2]++ {print $1 ":" $2 ":" $3}' <<< "${data_sw}"))
 		for sw in $(tr ' ' '\n' <<< ${sws[@]%%:*} | sort -u); do
@@ -1164,8 +1165,8 @@ _ps_query() {
 			if ! ${_ps_query_groups}; then
 				for name in $(awk -F ':' -v RS=' ' -v sw="${sw}" '{if (sw == $1) print (($2 == "") ? "[unknown]" : $2) ":" $3}' <<< "${sws[@]}"); do
 					echo -n "  ${name:=[unknown]}"
-					if [[ " ${_ps_setted_sw[@]%:*} " =~ " ${sw}:${name%%:*} " ]]; then
-						echo -n " [setted:$(_ps_get_mode_by_setted_sw ${sw})]"
+					if [[ " ${_ps_selected_sw[@]%:*} " =~ " ${sw}:${name%%:*} " ]]; then
+						echo -n " [selected:$(_ps_get_mode_by_selected_sw ${sw})]"
 					fi
 					echo
 				done
@@ -1204,18 +1205,18 @@ _ps_install() {
 	_ps_check_sw "install" ${data_sw}
 
 	if [ -n "${swf_modified}" ]; then
-		_ps_notify_about_sw_and_get_confirm "installed with modified points" \
+		_ps_notify_about_sw_and_get_confirm "installed with modified associations" \
 			"$(grep -E ":($(tr ' ' '|' <<< ${swf_modified[@]%.*})):" <<< "${data_sw}")"
 	fi
 
 	_ps_commit "Installing switchers"
-	for sw in ${file_sw[@]}; do
-		_ps_progress "1" "1" "installing ${sw##*/} file switcher"
-		cp -r ${@} ${_ps_switcher_files_path}
+	for sw in ${!file_sw[@]}; do
+		_ps_progress_noret=true _ps_progress "$((sw+1))" "${#file_sw[@]}" "installing ${file_sw[${sw}]##*/} file switcher"
+		cp -r ${file_sw[${sw}]} ${_ps_switcher_files_path}
 	done
 }
 
-_ps_remove() {
+_ps_uninstall() {
 	local file_sw=() sw swf
 	for sw in ${@#*:}; do
 		swf="${_ps_switcher_files_path}/${sw}.sw"
@@ -1233,15 +1234,15 @@ _ps_remove() {
 	_ps_commit "Reading switcher files"
 	data_sw=$(_ps_read_switcher_file ${@})
 
-	_ps_commit "Checking switchers for removing"
-	_ps_check_sw "remove" ${data_sw}
+	_ps_commit "Checking switchers for uninstalling"
+	_ps_check_sw "uninstall" ${data_sw}
 
-	_ps_notify_about_sw_and_get_confirm "removed" "${data_sw}"
+	_ps_notify_about_sw_and_get_confirm "uninstalled" "${data_sw}"
 
-	_ps_commit "Removing switchers"
-	for sw in ${file_sw[@]}; do
-		_ps_progress "1" "1" "removing ${sw##*/} file switcher"
-		rm ${sw}
+	_ps_commit "Uninstalling switchers"
+	for sw in ${!file_sw[@]}; do
+		_ps_progress_noret=true _ps_progress "$((sw+1))" "${#file_sw[@]}" "removing ${file_sw[${sw}]##*/} file switcher"
+		rm ${file_sw[${sw}]}
 	done
 }
 
@@ -1250,13 +1251,13 @@ _ps_help_main() {
 operations:
     pacman-switch {-h --help}
     pacman-switch {-V --version}
-    pacman-switch {-E --enable}  [options] [switcher(s)]
-    pacman-switch {-D --disable} [options] [switcher(s)]
-    pacman-switch {-S --set}     [options] [switcher(s)]
-    pacman-swicth {-U --unset}   [options] [switcher(s)]
-    pacman-switch {-Q --query}   [options] [switcher(s)]
-    pacman-switch {-I --install} [options] [switcher(s)]
-    pacman-switch {-R --remove}  [options] [switcher(s)]
+    pacman-switch {-E --enable}     [options] [switcher(s)]
+    pacman-switch {-D --disable}    [options] [switcher(s)]
+    pacman-switch {-S --select}     [options] [switcher(s)]
+    pacman-switch {-R --reject}     [options] [switcher(s)]
+    pacman-switch {-Q --query}      [options] [switcher(s)]
+    pacman-switch {-I --install}    [options] [file(s)]
+    pacman-switch {-U --uninstall}  [options] [switcher(s)]
 
 use 'pacman-switch <operation> {-h --help}' with an operation for available options\n"
 }
@@ -1265,7 +1266,7 @@ _ps_help_enable() {
 	_ps_message "usage:  pacman-switch {-E --enable} [options] [switcher(s)]
 options:
   -a, --auto
-  -s, --set
+  -s, --select
       --needed
       --noconfirm
       --noghost\n"
@@ -1276,12 +1277,12 @@ _ps_help_disable() {
 options:
   -a, --auto
   -g, --ghost
-  -u, --unset
+  -r, --reject
       --noconfirm\n"
 }
 
-_ps_help_set() {
-	_ps_message "usage:  pacman-switch {-S --set} [options] [switcher(s)]
+_ps_help_select() {
+	_ps_message "usage:  pacman-switch {-S --select} [options] [switcher(s)]
 options:
   -a, --auto
   -u, --update
@@ -1291,8 +1292,8 @@ options:
       --overwrite\n"
 }
 
-_ps_help_unset() {
-	_ps_message "usage:  pacman-switch {-U --unset} [options] [switcher(s)]
+_ps_help_reject() {
+	_ps_message "usage:  pacman-switch {-U --reject} [options] [switcher(s)]
 options:
   -a, --auto
   -d, --disable
@@ -1319,8 +1320,8 @@ options:
   --noconfirm\n"
 }
 
-_ps_help_remove() {
-	_ps_message "usage:  pacman-switch {-R --remove} [options] [switcher(s)]
+_ps_help_uninstall() {
+	_ps_message "usage:  pacman-switch {-U --uninstall} [options] [switcher(s)]
 options:
   --noconfirm\n"
 }
@@ -1340,7 +1341,7 @@ _ps_run_operation() {
 	shift 1
 
 	case "${operation}" in
-		"enable"|"disable"|"set"|"unset"|"query"|"install"|"remove");;
+		"enable"|"disable"|"select"|"reject"|"query"|"install"|"uninstall");;
 		*) _ps_error "internal error: unknown operation '${operation}' for _ps_run_operation";;
 	esac
 
@@ -1476,8 +1477,8 @@ _ps_run_operation() {
 		_ps_error "no targets specified"
 	fi
 
-	_ps_read_setted_switchers
-	_ps_static_setted_sw=(${_ps_setted_sw[@]})
+	_ps_read_selected_switchers
+	_ps_static_selected_sw=(${_ps_selected_sw[@]})
 
 	_ps_chmod_switchers +w
 	_ps_${operation} "${switchers[@]}"
@@ -1546,8 +1547,8 @@ fi
 case "${_ps_root_arg}" in
 	-E|--enable)
 	_ps_run_operation enable \
-		-{s,-set}:1:enable_set \
-		-{a,-auto}:1:automode,enable_set \
+		-{s,-select}:1:enable_select \
+		-{a,-auto}:1:automode,enable_select \
 		-{h,-help}:1:helpmode \
 		--needed:1:needed \
 		--noconfirm:1:noconfirm \
@@ -1556,15 +1557,15 @@ case "${_ps_root_arg}" in
 	-D|--disable)
 	_ps_conflicting_args="disable_ghost:ghost automode:auto"
 	_ps_run_operation disable \
-		-{a,-auto}:1:automode,disable_unset \
-		-{g,-ghost}:1:disable_ghost,disable_unset,norequire_sw \
-		-{u,-unset}:1:disable_unset \
+		-{a,-auto}:1:automode,disable_reject \
+		-{g,-ghost}:1:disable_ghost,disable_reject,norequire_sw \
+		-{u,-reject}:1:disable_reject \
 		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm
 	;;
-	-S|--set)
+	-S|--select)
 	_ps_conflicting_args="automode:auto updatemode:update"
-	_ps_run_operation set \
+	_ps_run_operation select \
 		-{a,-auto}:1:automode,onlygroup \
 		-{u,-update}:1:updatemode,norequire_sw \
 		-{h,-help}:1:helpmode \
@@ -1573,11 +1574,11 @@ case "${_ps_root_arg}" in
 		--noghost:1:noghost \
 		--overwrite:1:overwrite
 	;;
-	-U|--unset)
-	_ps_run_operation unset \
-		-{r,-replace}:1:unset_replace \
-		-{d,-disable}:1:unset_disable \
-		-{a,-auto}:1:automode,unset_replace,unset_disable \
+	-R|--reject)
+	_ps_run_operation reject \
+		-{r,-replace}:1:reject_replace \
+		-{d,-disable}:1:reject_disable \
+		-{a,-auto}:1:automode,reject_replace,reject_disable \
 		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm \
 		--noghost:1:noghost
@@ -1602,9 +1603,9 @@ case "${_ps_root_arg}" in
 		--needed:1:needed \
 		--noconfirm:1:noconfirm
 	;;
-	-R|--remove)
+	-U|--uninstall)
 	_ps_onlyswitcher=true
-	_ps_run_operation remove \
+	_ps_run_operation uninstall \
 		-{h,-help}:1:helpmode \
 		--noconfirm:1:noconfirm
 	;;
