@@ -164,7 +164,13 @@ _ps_read_switcher_file() {
 					"$(sed 's/-//g; s/_//g' <<< "${group}${name}")" =~ [[:punct:]] || \
 					"${group}${name}" =~ " " ]] || \
 					grep -Eq "(^|/|:| )(/|:| |$)" <<< "${associations[@]}" || \
-					(($(grep -o ':' <<< "${associations[@]}" | wc -l) != ${#associations[@]})); then
+					awk -v RS=' ' -v len="${#associations[@]}" '!a[$1]++ {b+=split($1, cache, ":")}
+					END {
+						if (len == length(a) && len*2 == b)
+							exit 1
+						else
+							exit 0
+					}' <<< "${associations[@]}"; then
 					exit 1
 				fi
 				awk -v RS=" " \
@@ -384,7 +390,7 @@ _ps_check_switcher_by_algorithm() {
 }
 
 _ps_check_selected_switcher() {
-	_ps_check_switcher_by_algorithm '[[ " ${_ps_selected_sw[@]%:*}" =~ " ${sw}:" ]]' \
+	_ps_check_switcher_by_algorithm '[[ " ${_ps_selected_sw[@]}" =~ " ${sw}:" ]]' \
 		'checking for selected switchers' \
 		${@}
 }
@@ -1269,7 +1275,8 @@ options:
   -s, --select
       --needed
       --noconfirm
-      --noghost\n"
+      --noghost
+      --overwrite\n"
 }
 
 _ps_help_disable() {
@@ -1418,16 +1425,6 @@ _ps_run_operation() {
 		}
 	}' <<< "${_ps_conflicting_args}")"
 
-	if [ ! -d "${_ps_switcher_files_path}" ]; then
-		_ps_init_error "path to switcher files not found: ${_ps_switcher_files_path}"
-	fi
-	if [ ! -d "${_ps_enabled_switchers_path}" ]; then
-		_ps_init_error "path to switchers not found: ${_ps_enabled_switchers_path}"
-	fi
-	if ${_ps_haserror}; then
-		exit 1
-	fi
-
 	_ps_read_enabled_switchers
 
 	local switchers=() switcher group name
@@ -1480,11 +1477,10 @@ _ps_run_operation() {
 	_ps_read_selected_switchers
 	_ps_static_selected_sw=(${_ps_selected_sw[@]})
 
+	trap '_ps_chmod_switchers -w' EXIT
 	_ps_chmod_switchers +w
 	_ps_${operation} "${switchers[@]}"
 }
-
-trap '_ps_chmod_switchers -w' EXIT
 
 _ps_title_error="error:"
 _ps_title_warning="warning:"
@@ -1524,6 +1520,16 @@ if ${_PS_RUN_IN_ALPM_HOOKS}; then
 	_ps_title_progress="  ${_ps_blue}->${_ps_bold} "
 fi
 
+if [ ! -d "${_ps_switcher_files_path}" ]; then
+	_ps_init_error "path to switcher files not found: ${_ps_switcher_files_path}"
+fi
+if [ ! -d "${_ps_enabled_switchers_path}" ]; then
+	_ps_init_error "path to switchers not found: ${_ps_enabled_switchers_path}"
+fi
+if ${_ps_haserror}; then
+	exit 1
+fi
+
 _ps_args=($(awk -v RS=' ' '{
 	gsub(/\x1B\[[0-9;]*[A-Za-z]/, "", $1)
 	if (substr($1, 1, 1) == "-") {
@@ -1552,7 +1558,8 @@ case "${_ps_root_arg}" in
 		-{h,-help}:1:helpmode \
 		--needed:1:needed \
 		--noconfirm:1:noconfirm \
-		--noghost:1:noghost
+		--noghost:1:noghost \
+		--overwrite:1:overwrite
 	;;
 	-D|--disable)
 	_ps_conflicting_args="disable_ghost:ghost automode:auto"
