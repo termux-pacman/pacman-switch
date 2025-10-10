@@ -1,0 +1,118 @@
+#!/data/data/com.termux/files/usr/bin/bash
+
+set -e -u -o pipefail
+
+termux_error_exit() {
+	echo -e "$*" 1>&2
+	exit 1
+}
+
+_show_usage() {
+	echo "Usage: update-alternatives [<option> ...] <command>"
+	echo
+	echo "Commands:"
+	echo "  --install <link> <name> <path> <priority>"
+	echo "    [--slave <link> <name> <path>] ..."
+	echo "                           add a group of alternatives to the system."
+	echo "  --remove <name> <path>   remove <path> from the <name> group alternative."
+	echo
+	echo "<link> is the symlink pointing to /data/data/com.termux/files/usr/etc/alternatives/<name>."
+	echo "  (e.g. /usr/bin/pager)"
+	echo "<name> is the master name for this link group."
+	echo "  (e.g. pager)"
+	echo "<path> is the location of one of the alternative target files."
+	echo "  (e.g. /usr/bin/less)"
+	echo "<priority> is an integer; options with higher numbers have higher priority in"
+	echo "  automatic mode."
+	echo
+	echo "Options:"
+	echo "  --help                   show this help message."
+	echo "  --version                show the version."
+	exit 1
+}
+
+_show_version() {
+	echo "update-alternatives version 1.22.6-dirty."
+	echo
+	echo "This is free software; see the GNU General Public License version 2 or"
+	echo "later for copying conditions. There is NO warranty."
+	exit 0
+}
+
+
+INSTALL_HELP="update-alternatives: --install needs <link> <name> <path> <priority>"
+SLAVE_HELP="update-alternatives: --slave needs <link> <name> <path>"
+REMOVE_HELP="update-alternatives: --remove needs <name> <path>"
+SWITCHER_DIR="${PREFIX}/share/pacman-switch"
+
+COUNTER=0
+LINK=""
+NAME=""
+ALTERNATIVE=""
+PRIORITY=""
+DEPENDENTS=""
+
+
+if [ "$#" -lt 1 ]; then _show_usage; fi
+while (($# >= 1)); do
+	case "$1" in
+		--) shift 1; break;;
+		--help) _show_usage;;
+		--version) _show_version;;
+		--install)
+			if [ $# -ge 5 ]; then
+				shift 1
+				if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" ]]; then
+					termux_error_exit "$INSTALL_HELP"
+				fi
+				LINK="${1/$PREFIX\//}" NAME="$2" ALTERNATIVE="${3/$PREFIX\//}" PRIORITY="$4"
+				shift 3
+			else
+				termux_error_exit "$INSTALL_HELP"
+			fi
+			;;
+		--slave)
+			if [ $# -ge 4 ]; then
+				shift 1
+				if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
+					termux_error_exit "$SLAVE_HELP"
+				fi
+				DEPENDENTS+=" ${1/$PREFIX\//}:${3/$PREFIX\//}"
+				shift 2
+			else
+				termux_error_exit "$SLAVE_HELP"
+			fi
+			;;
+		--remove)
+			if [ $# -ge 3 ]; then
+				shift 1
+				if [[ -z "$1" || -z "$2" ]]; then
+					termux_error_exit "$REMOVE_HELP"
+				fi
+				pacman-switch --disable --reject --noconfirm "$1":*
+				exit 0
+			else
+				termux_error_exit "$REMOVE_HELP"
+			fi
+			;;
+		-*) termux_error_exit "update-alternatives: unknown option '$1'";;
+		*) termux_error_exit "update-alternatives: error: unknown argument '$1'";;
+	esac
+	shift 1
+done
+
+SWITCHER_FILE="${SWITCHER_DIR}/${NAME}-${COUNTER}.sw"
+while [[ -f "$SWITCHER_FILE" ]]; do
+	COUNTER=$((COUNTER + 1))
+	SWITCHER_FILE="${SWITCHER_DIR}/${NAME}-${COUNTER}.sw"
+done
+
+mkdir -p "${SWITCHER_DIR}"
+{
+	echo "switcher_group_${NAME}() {"
+	echo "  priority=${PRIORITY}"
+	echo "  associations=(${LINK}:${ALTERNATIVE}${DEPENDENTS})"
+	echo "}"
+} > "${SWITCHER_FILE}"
+
+pacman-switch --enable --select --noconfirm "${NAME}-${COUNTER}"
